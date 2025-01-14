@@ -18,6 +18,19 @@ from FinMind.data import DataLoader
 import time
 import webbrowser
 import requests
+from dotenv import load_dotenv
+import os
+
+# 載入環境變數
+load_dotenv()
+
+# 資料庫設定
+DB_CONFIG = {
+    'host': os.getenv('DB_HOST'),
+    'user': os.getenv('DB_USER'),
+    'password': os.getenv('DB_PASSWORD'),
+    'database': os.getenv('DB_DATABASE')
+}
 
 def get_week_first_day_indices(dates):
     """獲取每週第一個交易日的索引"""
@@ -33,8 +46,83 @@ def get_week_first_day_indices(dates):
 class StockApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("股票查詢與分析系統")
-        self.root.geometry("2000x1400")  # 修改度為 1400
+        self.root.title("股票查詢系統")
+        
+        # 獲取螢幕尺寸
+        screen_width = root.winfo_screenwidth()
+        screen_height = root.winfo_screenheight()
+        window_width = int(screen_width * 0.8)
+        window_height = int(screen_height * 0.8)
+        
+        # 設置主視窗大小
+        self.root.geometry(f"{window_width}x{window_height}")
+        
+        # 建立主框架 (只建立一次)
+        self.main_frame = ttk.Frame(root, padding="10")
+        self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        root.grid_rowconfigure(0, weight=1)
+        root.grid_columnconfigure(0, weight=1)
+        
+        # 建立左側選單框架
+        self.menu_frame = ttk.Frame(self.main_frame)
+        self.menu_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        
+        # 建立功能選擇下拉選單
+        self.function_var = tk.StringVar()
+        self.function_choices = [
+            "所有股票",
+            "上市股票",
+            "上櫃股票",
+            "波動30%以上股票",
+            "布林帶排序",
+            "追蹤自選股"
+        ]
+        self.function_var.set(self.function_choices[0])
+        function_menu = ttk.OptionMenu(
+            self.menu_frame, 
+            self.function_var, 
+            self.function_choices[0], 
+            *self.function_choices,
+            command=self.on_function_change
+        )
+        function_menu.pack(fill=tk.X, pady=5)
+        
+        # 建立股票列表
+        columns = ('代碼', '名稱', '市場', '資訊')
+        self.stock_tree = ttk.Treeview(
+            self.menu_frame, 
+            columns=columns,
+            show='headings',
+            height=20
+        )
+        
+        # 設置列標題
+        for col in columns:
+            self.stock_tree.heading(col, text=col)
+            self.stock_tree.column(col, width=100)
+        
+        # 加入垂直捲動條
+        scrollbar = ttk.Scrollbar(
+            self.menu_frame, 
+            orient=tk.VERTICAL, 
+            command=self.stock_tree.yview
+        )
+        self.stock_tree.configure(yscrollcommand=scrollbar.set)
+        
+        # 放置 Treeview 和捲動條
+        self.stock_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # 建立右側圖表框架
+        self.chart_frame = ttk.Frame(self.main_frame)
+        self.chart_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        
+        # 設置列和行的權重
+        self.main_frame.grid_columnconfigure(1, weight=1)
+        self.main_frame.grid_rowconfigure(0, weight=1)
+        
+        # 載入股票列表
+        self.load_stock_list()
         
         # 添加窗關事件
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -119,74 +207,6 @@ class StockApp:
         self.is_polling = False
         self.current_polling_index = 0
         
-        # 創建右側功能表框架
-        self.menu_frame = ttk.Frame(self.main_frame)
-        self.menu_frame.grid(row=1, column=1, sticky=(tk.N, tk.S), padx=5)
-        self.main_frame.grid_columnconfigure(1, weight=0)  # 設置固定寬度，不隨視窗縮放
-        
-        # 創建功能選擇下拉選單
-        self.function_var = tk.StringVar()
-        self.function_combobox = ttk.Combobox(self.menu_frame, 
-                                             textvariable=self.function_var,
-                                             state='readonly',
-                                             width=25)  # 增加寬度
-        self.function_combobox['values'] = [
-            '所有股票', 
-            '上市股票', 
-            '上櫃股票', 
-            '波動30%以上股票', 
-            '布林帶排序',
-            '布林通道窄幅',
-            '乖離率超出範圍',
-            '可轉債股票',
-            '均線多頭排列',
-            '均線突破選股',
-            '量能放大選股',
-            '跳空缺口選股',
-            '均線交叉選股',
-            'MACD指標選股',
-            '橫向整理選股',
-            '當日反彈選股',
-            '去年12月波動選股',  # 新增
-            '追蹤自選股',
-            '財經新聞',
-            '技術分析'
-        ]
-        self.function_combobox.set('所有股票')  # 設置設值
-        self.function_combobox.pack(pady=5)
-        self.function_combobox.bind('<<ComboboxSelected>>', self.on_function_change)
-        
-        # 創建標題標
-        ttk.Label(self.menu_frame, text="股票列表", font=('Arial', 12, 'bold')).pack(pady=5)
-        
-        # 創建股票列表框架
-        stock_list_frame = ttk.Frame(self.menu_frame)
-        stock_list_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # 創建 Treeview 來顯示股票列表
-        columns = ('code', 'name', 'market', 'value')
-        self.stock_tree = ttk.Treeview(stock_list_frame, columns=columns, show='headings', height=30)
-        
-        # 設置列標題
-        self.stock_tree.heading('code', text='股號')
-        self.stock_tree.heading('name', text='股名')
-        self.stock_tree.heading('market', text='市場')
-        self.stock_tree.heading('value', text='計算結果')
-        
-        # 設置列寬
-        self.stock_tree.column('code', width=80)
-        self.stock_tree.column('name', width=180)
-        self.stock_tree.column('market', width=60)
-        self.stock_tree.column('value', width=400)
-        
-        # 添加滾動條
-        scrollbar = ttk.Scrollbar(stock_list_frame, orient=tk.VERTICAL, command=self.stock_tree.yview)
-        self.stock_tree.configure(yscrollcommand=scrollbar.set)
-        
-        # 放置 Treeview 和滾動條
-        self.stock_tree.pack(side=tk.LEFT, fill=tk.Y)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
         # 建進度條框架（在股票列表下方）
         self.progress_frame = ttk.Frame(self.menu_frame)
         self.progress_frame.pack(fill=tk.X, pady=5)
@@ -194,22 +214,9 @@ class StockApp:
         # 綁定點��
         self.stock_tree.bind('<Double-1>', self.on_stock_select)
         
-        # 載入股票列表
-        self.load_stock_list()
-        
-        # 設置整個右側功能表的最小寬度
-        self.menu_frame.grid_propagate(False)  # 防止框架自動調整大小
-        self.menu_frame.configure(width=750)   # 設置固定寬度
-        self.menu_frame.configure(height=window_height * 0.85)  # 設置高度與圖表一致
-
     def check_stock_code(self, code):
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             # 先查股票是否存在
@@ -253,12 +260,7 @@ class StockApp:
 
     def save_stock_code(self, code, name):
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             cursor.execute("INSERT INTO stock_code (code, name) VALUES (%s, %s)", 
                           (code, name))
@@ -357,42 +359,38 @@ class StockApp:
             self.canvas.draw()
 
     def save_daily_data(self, code, data):
-        """保存每到資料庫"""
+        """保存每日資料到資料庫"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
-            # 檢查並創建表格（如果存在）
+            # 檢查並創建表格（如果不存在）
             table_name = f"stock_{code}"
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {table_name} (
-                    date DATE PRIMARY KEY,
-                    open_price FLOAT,
-                    close_price FLOAT,
-                    high_price FLOAT,
-                    low_price FLOAT,
-                    volume INT
-                )
+                    date date NOT NULL COMMENT '日期',
+                    open_price decimal(10,2) DEFAULT NULL COMMENT '開盤價',
+                    high_price decimal(10,2) DEFAULT NULL COMMENT '最高價',
+                    low_price decimal(10,2) DEFAULT NULL COMMENT '最低價',
+                    close_price decimal(10,2) DEFAULT NULL COMMENT '收盤價',
+                    volume bigint(20) DEFAULT NULL COMMENT '成交量',
+                    PRIMARY KEY (date)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci
             """)
             
-            # 入據，如果日期已存在則��過
+            # 插入資料，如果日期已存在則跳過
             for d in data:
                 cursor.execute(f"""
                     INSERT IGNORE INTO {table_name} 
-                    (date, open_price, close_price, high_price, low_price, volume)
+                    (date, open_price, high_price, low_price, close_price, volume)
                     VALUES (%s, %s, %s, %s, %s, %s)
                 """, (
                     d.date,
-                    d.open,
-                    d.close,
-                    d.high,
-                    d.low,
-                    d.transaction  # 成交量
+                    float(d.open),
+                    float(d.high),
+                    float(d.low),
+                    float(d.close),
+                    int(d.transaction)  # 成交量
                 ))
             
             connection.commit()
@@ -413,12 +411,7 @@ class StockApp:
             
         try:
             # 先從資料獲取股票市場類型
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             cursor.execute("SELECT market_type FROM stock_code WHERE code = %s", (code,))
             result = cursor.fetchone()
@@ -709,12 +702,7 @@ class StockApp:
     def get_next_stock_code(self, current_code, direction='next'):
         """獲取一個或上一股票代碼"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             if direction == 'next':
@@ -847,12 +835,7 @@ class StockApp:
         
         try:
             # 連接數據庫獲取所有股票代碼
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             cursor.execute("SELECT code FROM stock_code ORDER BY code")
             all_codes = [row[0] for row in cursor.fetchall()]
@@ -887,12 +870,7 @@ class StockApp:
     def load_stock_list(self):
         """從數據庫載入股票列表"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             # 清空現有項目
@@ -900,7 +878,12 @@ class StockApp:
                 self.stock_tree.delete(item)
             
             # 獲取所有股票資訊
-            cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
+            cursor.execute("""
+                SELECT code, name, market_type 
+                FROM stock_code 
+                WHERE market_type IS NOT NULL 
+                ORDER BY code
+            """)
             stocks = cursor.fetchall()
             
             # 插入數據
@@ -932,12 +915,7 @@ class StockApp:
     def calculate_volatility(self, stock_code):
         """計算股票波動率"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             # 獲取最近30天的收盤價日期
@@ -998,12 +976,7 @@ class StockApp:
     def calculate_bollinger(self, stock_code):
         """計算布林帶指標"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             # 獲取最近20天的收盤價
@@ -1056,12 +1029,7 @@ class StockApp:
     def calculate_bias(self, stock_code):
         """計算乖離率"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             # 獲取最近一個交易日的成交量和最近20天的收盤價
@@ -1142,12 +1110,7 @@ class StockApp:
                     
                     # 從資料庫獲取標的股票資訊
                     try:
-                        connection = mysql.connector.connect(
-                            host='192.168.1.145',
-                            user='root',
-                            password='fender1106',
-                            database='stock_code'
-                        )
+                        connection = mysql.connector.connect(**DB_CONFIG)
                         cursor = connection.cursor()
                         
                         cursor.execute("SELECT name, market_type FROM stock_code WHERE code = %s", (stock_code,))
@@ -1189,21 +1152,40 @@ class StockApp:
         try:
             selected_function = self.function_var.get()
             
-            # 空現有的樹形視圖
+            # 清空現有的樹形視圖
             for item in self.stock_tree.get_children():
                 self.stock_tree.delete(item)
             
             # 連接數據庫
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             try:
-                if selected_function == "波動30%以上股票":
+                if selected_function == "上市股票":
+                    cursor.execute("""
+                        SELECT code, name, market_type 
+                        FROM stock_code 
+                        WHERE market_type = 'twse' 
+                        ORDER BY code
+                    """)
+                    stocks = cursor.fetchall()
+                    for stock in stocks:
+                        code, name, market_type = stock
+                        self.stock_tree.insert('', tk.END, values=(code, name, '上市', ''))
+                        
+                elif selected_function == "上櫃股票":
+                    cursor.execute("""
+                        SELECT code, name, market_type 
+                        FROM stock_code 
+                        WHERE market_type = 'tpex' 
+                        ORDER BY code
+                    """)
+                    stocks = cursor.fetchall()
+                    for stock in stocks:
+                        code, name, market_type = stock
+                        self.stock_tree.insert('', tk.END, values=(code, name, '上櫃', ''))
+                        
+                elif selected_function == "波動30%以上股票":
                     cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
                     stocks = cursor.fetchall()
                     
@@ -1234,32 +1216,33 @@ class StockApp:
                         
                         # 更新進度條和標籤
                         progress['value'] = i + 1
-                        progress_percent = int(i + 1) / len(stocks) * 100
-                        progress_label.config(text=f"計算中: {progress_percent}%")
+                        progress_percent = int((i + 1) / len(stocks) * 100)
+                        progress_label.config(text=f"計算中: {progress_percent:.1f}%")
                         self.root.update()
                     
-                    # 算完成後移除進度條和標籤
+                    # 計算完成後移除進度條和標籤
                     progress.destroy()
                     progress_label.destroy()
                     
                     # 按波動率降序排序
                     volatile_stocks.sort(key=lambda x: x[3]['volatility'], reverse=True)
                     
-                    # 添加到樹形視圖，這時才格式化顯示字符串
+                    # 添加到樹形視圖
                     for code, name, market_display, result in volatile_stocks:
                         display_text = (
                             f"{result['volatility']:.2f}% "
                             f"({result['start_date']}~{result['end_date']}) "
                             f"最高:{result['max_price']:.2f} "
                             f"最低:{result['min_price']:.2f} "
-                            f"量:{result['volume']}" )
+                            f"量:{result['volume']}"
+                        )
                         self.stock_tree.insert('', tk.END, values=(code, name, market_display, display_text))
                         
                 elif selected_function == "布林帶排序":
                     cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
                     stocks = cursor.fetchall()
                     
-                    # 在進度條框架中創建進度條
+                    # 創建進度條
                     progress = ttk.Progressbar(self.progress_frame, mode='determinate')
                     progress.pack(fill=tk.X, padx=5)
                     progress['maximum'] = len(stocks)
@@ -1276,701 +1259,65 @@ class StockApp:
                         code, name, market_type = stock
                         result = self.calculate_bollinger(code)
                         if result is not None:
-                            position = result['position']
                             market_display = '上市' if market_type == 'twse' else '上櫃'
-                            
-                            # 根據位置判斷狀態
-                            if position <= 0:
-                                status = "超賣"
-                            elif position >= 100:
-                                status = "超買"
-                            else:
-                                status = f"{position:.1f}%"
-                            
                             bollinger_stocks.append((
-                                code, 
-                                name, 
-                                market_display, 
-                                f"{status} ({result['current_price']:.2f})"
-                            ))
-                        
-                        # 更新進度條和標籤
-                        progress['value'] = i + 1
-                        progress_percent = int(i + 1) / len(stocks) * 100
-                        progress_label.config(text=f"計算中: {progress_percent}%")
-                        self.root.update()
-                    
-                    # 計算完成後移除進度條和標籤
-                    progress.destroy()
-                    progress_label.destroy()
-                    
-                    # 按布林帶位置排序（超賣在前，超買在後）
-                    def sort_key(x):
-                        value = x[3]
-                        if "超賣" in value:
-                            return -1
-                        elif "超買" in value:
-                            return 101
-                        else:
-                            try:
-                                return float(value.split('%')[0])
-                            except:
-                                return 50
-                    
-                    bollinger_stocks.sort(key=sort_key)
-                    
-                    # 添加到樹形視圖
-                    for stock in bollinger_stocks:
-                        self.stock_tree.insert('', tk.END, values=stock)
-                        
-                elif selected_function == "布林通道窄幅":
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
-                    stocks = cursor.fetchall()
-                    
-                    # 進度條框架中創進度條
-                    progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-                    progress.pack(fill=tk.X, padx=5)
-                    progress['maximum'] = len(stocks)
-                    progress['value'] = 0
-                    
-                    # 添加進度標籤
-                    progress_label = ttk.Label(self.progress_frame, text="計算中: 0%")
-                    progress_label.pack()
-                    
-                    self.root.update()
-                    
-                    narrow_stocks = []
-                    for i, stock in enumerate(stocks):
-                        code, name, market_type = stock
-                        result = self.calculate_bollinger_width(code)
-                        if result is not None:
-                            width = result['width_percent']
-                            # 篩選布林通道寬小於5%的股票
-                            if width < 5:
-                                market_display = '上市' if market_type == 'twse' else '上櫃'
-                                narrow_stocks.append((
-                                    code,
-                                    name,
-                                    market_display,
-                                    f"寬度: {width:.2f}% 價格: {result['current_price']:.2f} 量: {result['volume']} ({result['latest_date']})"
-                                ))
-                    
-                    # 計算完成後移除進度條和標籤
-                    progress.destroy()
-                    progress_label.destroy()
-                    
-                    # 按布林通道寬度排序（從窄到寬）
-                    narrow_stocks.sort(key=lambda x: float(x[3].split()[1].rstrip('%')))
-                    
-                    # 添加到樹形視圖
-                    for stock in narrow_stocks:
-                        self.stock_tree.insert('', tk.END, values=stock)
-                        
-                elif selected_function == "乖離率超出範圍":
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
-                    stocks = cursor.fetchall()
-                    
-                    # 在進度條框架中創建進度條
-                    progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-                    progress.pack(fill=tk.X, padx=5)
-                    progress['maximum'] = len(stocks)
-                    progress['value'] = 0
-                    
-                    # 添加進度標籤
-                    progress_label = ttk.Label(self.progress_frame, text="計算中: 0%")
-                    progress_label.pack()
-                    
-                    self.root.update()
-                    
-                    bias_stocks = []
-                    for i, stock in enumerate(stocks):
-                        code, name, market_type = stock
-                        result = self.calculate_bias(code)
-                        if result is not None:
-                            bias = result['bias']
-                            if abs(bias) >= 10:  # 篩選乖離率超過正負10%的股票
-                                market_display = '上市' if market_type == 'twse' else '上櫃'
-                                status = "正乖離" if bias > 0 else "負乖離"
-                                bias_stocks.append({
-                                    'code': code,
-                                    'name': name,
-                                    'market': market_display,
-                                    'bias': bias,
-                                    'price': result['current_price'],
-                                    'volume': result['volume']
-                                })
-                        
-                        # 更新進度
-                        progress['value'] = i + 1
-                        progress_percent = int((i + 1) / len(stocks) * 100)
-                        progress_label.config(text=f"計算中: {progress_percent}%")
-                        self.root.update()
-                    
-                    progress.destroy()
-                    progress_label.destroy()
-                    
-                    # 按乖離率絕對值大小降序排序
-                    bias_stocks.sort(key=lambda x: abs(x['bias']), reverse=True)
-                    
-                    # 設置 Treeview 標籤
-                    self.stock_tree.tag_configure('positive', foreground='red')
-                    self.stock_tree.tag_configure('negative', foreground='green')
-                    
-                    # 添加到樹形視圖
-                    for stock in bias_stocks:
-                        # 根據乖離率正負選擇標籤
-                        tag = 'positive' if stock['bias'] > 0 else 'negative'
-                        status = "正乖離" if stock['bias'] > 0 else "負乖離"
-                        
-                        self.stock_tree.insert('', tk.END, values=(
-                            stock['code'],
-                            stock['name'],
-                            stock['market'],
-                            f"{status} {abs(stock['bias']):.1f}% ({stock['price']:.2f}) 量:{stock['volume']}"
-                        ), tags=(tag,))
-                        
-                elif selected_function == "可轉債股票":
-                    # 獲取可轉債股票列表
-                    bonds = self.get_convertible_bonds()
-                    
-                    # 按到期日排序（快到期的在前面）
-                    def sort_by_due_date(x):
-                        try:
-                            # 從計算結果欄位中提取到期日
-                            due_date_str = x[3].split('到期:')[1].strip()
-                            return datetime.strptime(due_date_str, '%Y-%m-%d')
-                        except:
-                            # 如果解析失敗，返回一個很遠的未來日期
-                            return datetime(9999, 12, 31)
-                    
-                    bonds.sort(key=sort_by_due_date)
-                    
-                    # 添加到樹形視圖
-                    for stock in bonds:
-                        self.stock_tree.insert('', tk.END, values=stock)
-                        
-                elif selected_function == "財經新聞":
-                    # 清空現有項目
-                    for item in self.stock_tree.get_children():
-                        self.stock_tree.delete(item)
-                    
-                    # 修改列標題
-                    self.stock_tree.heading('code', text='日期')
-                    self.stock_tree.heading('name', text='來源')
-                    self.stock_tree.heading('market', text='標題')
-                    self.stock_tree.heading('value', text='連結')
-                    
-                    # 調整列寬
-                    self.stock_tree.column('code', width=150)  # 日期
-                    self.stock_tree.column('name', width=100)  # 來源
-                    self.stock_tree.column('market', width=400)  # 標題
-                    self.stock_tree.column('value', width=400)  # 連結
-                    
-                    # 獲取新聞
-                    from news import NewsCollector
-                    collector = NewsCollector()
-                    news_df = collector.get_all_news()
-                    
-                    if not news_df.empty:
-                        for _, news in news_df.iterrows():
-                            self.stock_tree.insert('', tk.END, values=(
-                                news['date'],
-                                news['source'],
-                                news['title'],
-                                news['link']
-                            ))
-                    
-                    # 修改雙擊事的處理
-                    def on_news_select(event):
-                        selection = self.stock_tree.selection()
-                        if selection:
-                            item = self.stock_tree.item(selection[0])
-                            link = item['values'][3]  # 獲取連結
-                            webbrowser.open(link)  # 開啟連結
-                    
-                    # 綁定新的雙擊事件
-                    self.stock_tree.bind('<Double-1>', on_news_select)
-                    
-                    # 添加刷新按鈕
-                    refresh_button = ttk.Button(self.menu_frame, 
-                        text="刷新新聞", 
-                        command=lambda: self.on_function_change(None))
-                    refresh_button.pack(pady=5)
-                    
-                elif selected_function == "均線多頭排列":
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
-                    stocks = cursor.fetchall()
-                    
-                    # 創建進度條
-                    progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-                    progress.pack(fill=tk.X, padx=5)
-                    progress['maximum'] = len(stocks)
-                    progress['value'] = 0
-                    
-                    progress_label = ttk.Label(self.progress_frame, text="計算中: 0%")
-                    progress_label.pack()
-                    
-                    self.root.update()
-                    
-                    trend_stocks = []
-                    for i, stock in enumerate(stocks):
-                        code, name, market_type = stock
-                        result = self.calculate_ma_trend(code)
-                        if result is not None:
-                            market_display = '上市' if market_type == 'twse' else '上櫃'
-                            trend_stocks.append((
                                 code,
                                 name,
                                 market_display,
-                                f"價格: {result['current_price']:.2f} "
-                                f"MA5: {result['ma5']:.2f} "
-                                f"MA10: {result['ma10']:.2f} "
-                                f"MA20: {result['ma20']:.2f} "
-                                f"量: {result['volume']}"
-                            ))
-                        
-                        # 更新進度
-                        progress['value'] = i + 1
-                        progress_percent = int(i + 1) / len(stocks) * 100
-                        progress_label.config(text=f"計算中: {progress_percent}%")
-                        self.root.update()
-                    
-                    progress.destroy()
-                    progress_label.destroy()
-                    
-                    # 添加到樹形視圖
-                    for stock in trend_stocks:
-                        self.stock_tree.insert('', tk.END, values=stock)
-                        
-                elif selected_function == "均線突破選股":
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
-                    stocks = cursor.fetchall()
-                    
-                    # 創建進度條
-                    progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-                    progress.pack(fill=tk.X, padx=5)
-                    progress['maximum'] = len(stocks)
-                    progress['value'] = 0
-                    
-                    progress_label = ttk.Label(self.progress_frame, text="計算中: 0%")
-                    progress_label.pack()
-                    
-                    self.root.update()
-                    
-                    breakthrough_stocks = []
-                    for i, stock in enumerate(stocks):
-                        code, name, market_type = stock
-                        result = self.calculate_ma_breakthrough(code)
-                        if result is not None:
-                            market_display = '上市' if market_type == 'twse' else '上櫃'
-                            breakthrough_stocks.append((
-                                code,
-                                name,
-                                market_display,
-                                f"突破MA20 {result['breakthrough_percent']:.2f}% "
-                                f"價格: {result['current_price']:.2f} "
-                                f"MA20: {result['ma20']:.2f} "
-                                f"量: {result['volume']}"
+                                result
                             ))
                         
                         # 更新進度
                         progress['value'] = i + 1
                         progress_percent = int((i + 1) / len(stocks) * 100)
-                        progress_label.config(text=f"計算中: {progress_percent}%")
+                        progress_label.config(text=f"計算中: {progress_percent:.1f}%")
                         self.root.update()
                     
                     progress.destroy()
                     progress_label.destroy()
                     
-                    # 按突破幅度排序
-                    breakthrough_stocks.sort(key=lambda x: float(x[3].split()[1].rstrip('%')), reverse=True)
+                    # 按布林帶位置排序
+                    bollinger_stocks.sort(key=lambda x: x[3]['position'])
                     
                     # 添加到樹形視圖
-                    for stock in breakthrough_stocks:
-                        self.stock_tree.insert('', tk.END, values=stock)
-                        
-                elif selected_function == "量能放大選股":
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
-                    stocks = cursor.fetchall()
-                    
-                    # 創建進度條
-                    progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-                    progress.pack(fill=tk.X, padx=5)
-                    progress['maximum'] = len(stocks)
-                    progress['value'] = 0
-                    
-                    progress_label = ttk.Label(self.progress_frame, text="計算中: 0%")
-                    progress_label.pack()
-                    
-                    self.root.update()
-                    
-                    volume_surge_stocks = []
-                    for i, stock in enumerate(stocks):
-                        code, name, market_type = stock
-                        result = self.calculate_volume_surge(code)
-                        if result is not None:
-                            market_display = '上市' if market_type == 'twse' else '上櫃'
-                            volume_surge_stocks.append((
-                                code,
-                                name,
-                                market_display,
-                                f"量增{result['volume_ratio']:.1f}倍 "
-                                f"均量:{result['avg_volume']} "
-                                f"現量:{result['current_volume']} "
-                                f"價格:{result['price']:.2f}"
-                            ))
-                    
-                    # 更新進度
-                    progress['value'] = i + 1
-                    progress_percent = int(i + 1) / len(stocks) * 100  # 修正括號
-                    progress_label.config(text=f"計算中: {progress_percent}%")
-                    self.root.update()
-                
-                    progress.destroy()
-                    progress_label.destroy()
-                    
-                    # 按量增倍數排序
-                    volume_surge_stocks.sort(key=lambda x: float(x[3].split('量增')[1].split('倍')[0]), reverse=True)
-                    
-                    # 添加到樹形視圖
-                    for stock in volume_surge_stocks:
-                        self.stock_tree.insert('', tk.END, values=stock)
-
-                elif selected_function == "跳空缺口選股":
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
-                    stocks = cursor.fetchall()
-                    
-                    # 創建進度條
-                    progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-                    progress.pack(fill=tk.X, padx=5)
-                    progress['maximum'] = len(stocks)
-                    progress['value'] = 0
-                    
-                    progress_label = ttk.Label(self.progress_frame, text="���算中: 0%")
-                    progress_label.pack()
-                    
-                    self.root.update()
-                    
-                    gap_stocks = []
-                    for i, stock in enumerate(stocks):
-                        code, name, market_type = stock
-                        result = self.calculate_price_gap(code)
-                        if result is not None:
-                            market_display = '上市' if market_type == 'twse' else '上櫃'
-                            gap_stocks.append((
-                                code,
-                                name,
-                                market_display,
-                                f"{result['type']} {result['gap_percent']:.2f}% "
-                                f"價格:{result['current_price']:.2f} "
-                                f"量:{result['volume']}"
-                            ))
-                    
-                    # 更新進度
-                    progress['value'] = i + 1
-                    progress_percent = int((i + 1) / len(stocks) * 100)  # 修正括號
-                    progress_label.config(text=f"計算中: {progress_percent}%")
-                    self.root.update()
-                
-                    progress.destroy()
-                    progress_label.destroy()
-                    
-                    # 跳空幅度排序
-                    gap_stocks.sort(key=lambda x: abs(float(x[3].split()[1].rstrip('%'))), reverse=True)
-                    
-                    # 添加到樹形視圖
-                    for stock in gap_stocks:
-                        self.stock_tree.insert('', tk.END, values=stock)
-
-                elif selected_function == "均線交叉選股":
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
-                    stocks = cursor.fetchall()
-                    
-                    # 創建進度條
-                    progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-                    progress.pack(fill=tk.X, padx=5)
-                    progress['maximum'] = len(stocks)
-                    progress['value'] = 0
-                    
-                    progress_label = ttk.Label(self.progress_frame, text="計算中: 0%")
-                    progress_label.pack()
-                    
-                    self.root.update()
-                    
-                    cross_stocks = []
-                    for i, stock in enumerate(stocks):
-                        code, name, market_type = stock
-                        result = self.calculate_ma_cross(code)
-                        if result is not None:
-                            market_display = '上市' if market_type == 'twse' else '上櫃'
-                            cross_stocks.append((
-                                code,
-                                name,
-                                market_display,
-                                f"{result['type']} "
-                                f"MA5: {result['ma5']:.2f} "
-                                f"MA20: {result['ma20']:.2f} "
-                                f"價格: {result['price']:.2f} "
-                                f"量: {result['volume']}"
-                            ))
-                        
-                        # 更新進度
-                        progress['value'] = i + 1
-                        progress_percent = int((i + 1) / len(stocks) * 100)
-                        progress_label.config(text=f"計算中: {progress_percent}%")
-                        self.root.update()
-                    
-                    progress.destroy()
-                    progress_label.destroy()
-                    
-                    # 按交叉類型排序（黃金交叉在前）
-                    cross_stocks.sort(key=lambda x: '0' if '黃金' in x[3] else '1')
-                    
-                    # 添加到樹形視圖
-                    for stock in cross_stocks:
-                        self.stock_tree.insert('', tk.END, values=stock)
-
-                elif selected_function == "MACD指標選股":
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
-                    stocks = cursor.fetchall()
-                    
-                    # 創建進度條
-                    progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-                    progress.pack(fill=tk.X, padx=5)
-                    progress['maximum'] = len(stocks)
-                    progress['value'] = 0
-                    
-                    progress_label = ttk.Label(self.progress_frame, text="計算中: 0%")
-                    progress_label.pack()
-                    
-                    self.root.update()
-                    
-                    macd_stocks = []
-                    for i, stock in enumerate(stocks):
-                        code, name, market_type = stock
-                        result = self.calculate_macd(code)
-                        if result is not None:
-                            market_display = '上市' if market_type == 'twse' else '上櫃'
-                            macd_stocks.append((
-                                code,
-                                name,
-                                market_display,
-                                f"{result['trend']} "
-                                f"MACD: {result['macd']:.3f} "
-                                f"Signal: {result['signal']:.3f} "
-                                f"價格: {result['price']:.2f} "
-                                f"量: {result['volume']}"
-                            ))
-                        
-                        # 更新進度
-                        progress['value'] = i + 1
-                        progress_percent = int((i + 1) / len(stocks) * 100)
-                        progress_label.config(text=f"計算中: {progress_percent}%")
-                        self.root.update()
-                    
-                    progress.destroy()
-                    progress_label.destroy()
-                    
-                    # 按趨勢排序（黃金交叉在前）
-                    macd_stocks.sort(key=lambda x: '0' if '黃金' in x[3] else '1')
-                    
-                    # 添加到樹形視圖
-                    for stock in macd_stocks:
-                        self.stock_tree.insert('', tk.END, values=stock)
-
-                elif selected_function == "橫向整理選股":
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
-                    stocks = cursor.fetchall()
-                    
-                    # 創建進度條
-                    progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-                    progress.pack(fill=tk.X, padx=5)
-                    progress['maximum'] = len(stocks)
-                    progress['value'] = 0
-                    
-                    progress_label = ttk.Label(self.progress_frame, text="計算中: 0%")
-                    progress_label.pack()
-                    
-                    self.root.update()
-                    
-                    sideways_stocks = []
-                    for i, stock in enumerate(stocks):
-                        code, name, market_type = stock
-                        result = self.calculate_sideways(code)
-                        if result is not None:
-                            market_display = '上市' if market_type == 'twse' else '上櫃'
-                            sideways_stocks.append((
-                                code,
-                                name,
-                                market_display,
-                                f"波動: {result['range_percent']:.2f}% "
-                                f"區間: {result['min_price']:.2f}~{result['max_price']:.2f} "
-                                f"均價: {result['avg_price']:.2f} "
-                                f"量: {result['volume']}"
-                            ))
-                        
-                        # 更新進度
-                        progress['value'] = i + 1
-                        progress_percent = int((i + 1) / len(stocks) * 100)
-                        progress_label.config(text=f"計算中: {progress_percent}%")
-                        self.root.update()
-                    
-                    progress.destroy()
-                    progress_label.destroy()
-                    
-                    # 按波動幅度排序（從小到大）
-                    sideways_stocks.sort(key=lambda x: float(x[3].split()[1].rstrip('%')))
-                    
-                    # 添加到樹形視圖
-                    for stock in sideways_stocks:
-                        self.stock_tree.insert('', tk.END, values=stock)
-
-                elif selected_function == "當日反彈選股":
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
-                    stocks = cursor.fetchall()
-                    
-                    # 創建進度條
-                    progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-                    progress.pack(fill=tk.X, padx=5)
-                    progress['maximum'] = len(stocks)
-                    progress['value'] = 0
-                    
-                    progress_label = ttk.Label(self.progress_frame, text="計算中: 0%")
-                    progress_label.pack()
-                    
-                    self.root.update()
-                    
-                    rebound_stocks = []
-                    for i, stock in enumerate(stocks):
-                        code, name, market_type = stock
-                        result = self.calculate_daily_rebound(code)
-                        if result is not None:
-                            market_display = '上市' if market_type == 'twse' else '上櫃'
-                            rebound_stocks.append((
-                                code,
-                                name,
-                                market_display,
-                                f"{result['date']} 反彈: {result['rebound_percent']:.2f}% 量: {result['volume']}"  # 移除 MA5 的顯示
-                            ))
-                        
-                        # 更新進度
-                        progress['value'] = i + 1
-                        progress_percent = int((i + 1) / len(stocks) * 100)
-                        progress_label.config(text=f"計算中: {progress_percent}%")
-                        self.root.update()
-                    
-                    progress.destroy()
-                    progress_label.destroy()
-                    
-                    # 按反彈幅度排序（從大到小）
-                    rebound_stocks.sort(key=lambda x: float(x[3].split('反彈: ')[1].split('%')[0]), reverse=True)
-                    
-                    # 添加到樹形視圖
-                    for stock in rebound_stocks:
-                        self.stock_tree.insert('', tk.END, values=stock)
-
-                elif selected_function == "去年12月波動選股":
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
-                    stocks = cursor.fetchall()
-                    
-                    # 創建進度條
-                    progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-                    progress.pack(fill=tk.X, padx=5)
-                    progress['maximum'] = len(stocks)
-                    progress['value'] = 0
-                    
-                    progress_label = ttk.Label(self.progress_frame, text="計算中: 0%")
-                    progress_label.pack()
-                    
-                    self.root.update()
-                    
-                    december_volatility_stocks = []
-                    for i, stock in enumerate(stocks):
-                        code, name, market_type = stock
-                        result = self.calculate_december_volatility(code)
-                        if result is not None:
-                            market_display = '上市' if market_type == 'twse' else '上櫃'
-                            december_volatility_stocks.append((
-                                code,
-                                name,
-                                market_display,
-                                f"波動: {result['volatility']:.2f}% "
-                                f"最高: {result['month_high']:.2f} "
-                                f"最低: {result['month_low']:.2f} "
-                                f"月初: {result['first_close']:.2f} "
-                                f"月底: {result['last_close']:.2f} "
-                                f"交易天數: {result['trading_days']} "
-                                f"成交量: {result['volume']}"
-                            ))
-                        
-                        # 更新進度
-                        progress['value'] = i + 1
-                        progress_percent = int((i + 1) / len(stocks) * 100)
-                        progress_label.config(text=f"計算中: {progress_percent}%")
-                        self.root.update()
-                    
-                    progress.destroy()
-                    progress_label.destroy()
-                    
-                    # 按波動幅度排序（從大到小）
-                    december_volatility_stocks.sort(key=lambda x: float(x[3].split()[1].rstrip('%')), reverse=True)
-                    
-                    # 添加到樹形視圖
-                    for stock in december_volatility_stocks:
-                        self.stock_tree.insert('', tk.END, values=stock)
-
-                elif selected_function == "追蹤自選股":
-                    try:
-                        # 連接資料庫
-                        connection = mysql.connector.connect(
-                            host='192.168.1.145',
-                            user='root',
-                            password='fender1106',
-                            database='stock_code'
+                    for code, name, market_display, result in bollinger_stocks:
+                        display_text = (
+                            f"位置: {result['position']:.1f}% "
+                            f"價格: {result['current_price']:.2f} "
+                            f"上軌: {result['upper_band']:.2f} "
+                            f"下軌: {result['lower_band']:.2f}"
                         )
-                        cursor = connection.cursor()
+                        self.stock_tree.insert('', tk.END, values=(code, name, market_display, display_text))
                         
-                        # 獲取追蹤清單，包含股票資訊和追蹤日期
-                        cursor.execute("""
-                            SELECT s.code, s.name, s.market_type, t.track_date 
-                            FROM tracked_stocks t
-                            JOIN stock_code s ON t.code = s.code 
-                            ORDER BY t.track_date DESC
-                        """)
+                elif selected_function == "追蹤自選股":
+                    # 獲取追蹤清單
+                    cursor.execute("""
+                        SELECT s.code, s.name, s.market_type, t.track_date 
+                        FROM tracked_stocks t
+                        JOIN stock_code s ON t.code = s.code 
+                        ORDER BY t.track_date DESC
+                    """)
+                    
+                    tracked_stocks = cursor.fetchall()
+                    
+                    # 添加到樹形視圖
+                    for stock in tracked_stocks:
+                        code, name, market_type, track_date = stock
+                        market_display = '上市' if market_type == 'twse' else '上櫃'
+                        self.stock_tree.insert('', tk.END, values=(
+                            code,
+                            name,
+                            market_display,
+                            f"追蹤日期: {track_date}"
+                        ))
                         
-                        tracked_stocks = cursor.fetchall()
-                        
-                        # 清空現有項目
-                        for item in self.stock_tree.get_children():
-                            self.stock_tree.delete(item)
-                        
-                        # 添加到樹形視圖
-                        for stock in tracked_stocks:
-                            code, name, market_type, track_date = stock
-                            market_display = '上市' if market_type == 'twse' else '上櫃'
-                            
-                            # 格式化追蹤日期
-                            if isinstance(track_date, str):
-                                formatted_date = track_date
-                            else:
-                                formatted_date = track_date.strftime('%Y-%m-%d')
-                                
-                            self.stock_tree.insert('', tk.END, values=(
-                                code,
-                                name,
-                                market_display,
-                                f"追蹤日期: {formatted_date}"
-                            ))
-                        
-                    except mysql.connector.Error as err:
-                        messagebox.showerror("錯誤", f"資料庫錯誤: {err}")
-                    finally:
-                        if connection.is_connected():
-                            cursor.close()
-                            connection.close()
-
-                else:
-                    cursor.execute("SELECT code, name, market_type FROM stock_code ORDER BY code")
+                else:  # 所有股票
+                    cursor.execute("""
+                        SELECT code, name, market_type 
+                        FROM stock_code 
+                        WHERE market_type IS NOT NULL 
+                        ORDER BY code
+                    """)
                     stocks = cursor.fetchall()
                     for stock in stocks:
                         code, name, market_type = stock
@@ -1990,12 +1337,7 @@ class StockApp:
     def calculate_bollinger_width(self, stock_code):
         """計算布林通道寬度"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             # 獲取最近一個易日的數據和前20天的收盤價
@@ -2055,12 +1397,7 @@ class StockApp:
     def calculate_ma_trend(self, stock_code):
         """計算均線多頭排列"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             table_name = f"stock_{stock_code}"
@@ -2118,12 +1455,7 @@ class StockApp:
     def calculate_ma_breakthrough(self, stock_code):
         """計算均線突破"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             table_name = f"stock_{stock_code}"
@@ -2177,12 +1509,7 @@ class StockApp:
     def calculate_volume_surge(self, stock_code):
         """計算量能放大"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             table_name = f"stock_{stock_code}"
@@ -2235,12 +1562,7 @@ class StockApp:
     def calculate_price_gap(self, stock_code):
         """計算跳空缺口"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             table_name = f"stock_{stock_code}"
@@ -2305,12 +1627,7 @@ class StockApp:
     def calculate_ma_cross(self, stock_code):
         """計算均線交叉"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             table_name = f"stock_{stock_code}"
@@ -2377,12 +1694,7 @@ class StockApp:
     def calculate_macd(self, stock_code):
         """計算 MACD 指標"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             table_name = f"stock_{stock_code}"
@@ -2460,12 +1772,7 @@ class StockApp:
     def calculate_sideways(self, stock_code, days=20, threshold=0.05):
         """計算票是否處於橫向整理"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             table_name = f"stock_{stock_code}"
@@ -2529,15 +1836,10 @@ class StockApp:
             return
             
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
-            # 檢查股是否存在
+            # 檢查股票是否存在
             cursor.execute("SELECT name FROM stock_code WHERE code = %s", (code,))
             result = cursor.fetchone()
             
@@ -2545,15 +1847,9 @@ class StockApp:
                 messagebox.showerror("錯誤", "找不到此股票代碼")
                 return
                 
-            # 檢查是否已經在追蹤清單中
-            cursor.execute("SELECT code FROM tracked_stocks WHERE code = %s", (code,))
-            if cursor.fetchone():
-                messagebox.showinfo("提示", "此股票已在追蹤清單中")
-                return
-                
-            # 添加到追蹤清單
+            # 使用 REPLACE INTO 來處理更新情況
             cursor.execute("""
-                INSERT INTO tracked_stocks (code, track_date) 
+                REPLACE INTO tracked_stocks (code, track_date) 
                 VALUES (%s, CURDATE())
             """, (code,))
             
@@ -2561,7 +1857,7 @@ class StockApp:
             messagebox.showinfo("成功", f"已將股票 {code} 加入追蹤清單")
             
         except mysql.connector.Error as err:
-            messagebox.showerror("錯誤", f"資料庫錯: {err}")
+            messagebox.showerror("錯誤", f"資料庫錯誤: {err}")
         finally:
             if connection.is_connected():
                 cursor.close()
@@ -2570,12 +1866,7 @@ class StockApp:
     def get_tracked_stocks(self):
         """獲取追蹤清單"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             # 獲取追蹤清單
@@ -2599,12 +1890,7 @@ class StockApp:
     def calculate_daily_rebound(self, stock_code):
         """計算過去200天內每天的反彈幅度，並檢查5日均線趨勢"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             table_name = f"stock_{stock_code}"
@@ -2672,12 +1958,7 @@ class StockApp:
     def calculate_december_volatility(self, stock_code):
         """計算去年12月的價格波動"""
         try:
-            connection = mysql.connector.connect(
-                host='192.168.1.145',
-                user='root',
-                password='fender1106',
-                database='stock_code'
-            )
+            connection = mysql.connector.connect(**DB_CONFIG)
             cursor = connection.cursor()
             
             # 獲取去年12月的數據
